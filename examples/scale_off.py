@@ -250,37 +250,59 @@ if __name__ == '__main__':
         min, max = mesh.extents()
         total_min = np.min(np.array(min))
         total_max = np.max(np.array(max))
+        total_size = np.max(np.array(max) - np.array(min))
 
         print('%s extents before %f - %f, %f - %f, %f - %f.' % (os.path.basename(filepath), min[0], max[0], min[1], max[1], min[2], max[2]))
 
-        # Set the center (although this should usually be the origin already).
-        centers = (
-            (min[0] + max[0]) / 2,
-            (min[1] + max[1]) / 2,
-            (min[2] + max[2]) / 2
-        )
-        # Scales all dimensions equally.
-        sizes = (
-            total_max - total_min,
-            total_max - total_min,
-            total_max - total_min
-        )
-        translation = (
-            -centers[0],
-            -centers[1],
-            -centers[2]
-        )
-        scales = (
-            1 / (sizes[0] + 2 * args.padding * sizes[0]),
-            1 / (sizes[1] + 2 * args.padding * sizes[1]),
-            1 / (sizes[2] + 2 * args.padding * sizes[2])
-        )
+        # move min point to (0, 0, 0)
+        mesh.translate(-np.array(min))
+        mesh.scale((1.0/total_size, ) * 3)
 
-        mesh.translate(translation)
-        mesh.scale(scales)
+        mesh.scale(( scale - 2 * args.padding, ) * 3)
 
-        mesh.translate((0.5, 0.5, 0.5))
-        mesh.scale((scale, scale, scale))
+        mesh.translate((args.padding, ) * 3)
+
+        # ensure object is centered in width, depth, height
+        min, max = mesh.extents()
+
+        new_center = np.array((args.width , args.depth + args.padding, args.height + args.padding)) / 2
+        old_center = np.array(np.array(max) - np.array(min)) / 2 + np.array(min)
+
+        print(new_center)
+
+        mesh.translate(new_center - old_center)
+
+
+
+
+        # # Set the center (although this should usually be the origin already).
+        # centers = (
+        #     (min[0] + max[0]) / 2,
+        #     (min[1] + max[1]) / 2,
+        #     (min[2] + max[2]) / 2
+        # )
+        # # Scales all dimensions equally.
+        # sizes = (
+        #     total_max - total_min,
+        #     total_max - total_min,
+        #     total_max - total_min
+        # )
+        # translation = (
+        #     -centers[0],
+        #     -centers[1],
+        #     -centers[2]
+        # )
+        # scales = (
+        #     1 / (sizes[0] + 2 * args.padding * sizes[0]),
+        #     1 / (sizes[1] + 2 * args.padding * sizes[1]),
+        #     1 / (sizes[2] + 2 * args.padding * sizes[2])
+        # )
+
+        # mesh.translate(translation)
+        # mesh.scale(scales)
+
+        # mesh.translate((0.5, 0.5, 0.5))
+        # mesh.scale((scale, scale, scale))
 
         min, max = mesh.extents()
         print('%s extents after %f - %f, %f - %f, %f - %f.' % (os.path.basename(filepath), min[0], max[0], min[1], max[1], min[2], max[2]))

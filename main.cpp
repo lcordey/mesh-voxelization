@@ -290,11 +290,18 @@ public:
   /** \brief Voxelize the given mesh into a SDF.
    * \param[out] sdf volume to fill with sdf values
    */
-  void voxelize_sdf(Eigen::Tensor<float, 3, Eigen::RowMajor>& sdf, const VoxelizationMode &mode) {
+  void voxelize_sdf(Eigen::Tensor<float, 3, Eigen::RowMajor>& sdf, const VoxelizationMode &mode,
+                    Eigen::Tensor<float, 3, Eigen::RowMajor> *intersects = 0) {
 
     int height = sdf.dimension(0);
     int width = sdf.dimension(1);
     int depth = sdf.dimension(2);
+
+    if (intersects == 0){
+      intersects = new Eigen::Tensor<float, 3, Eigen::RowMajor>(height, width, depth);
+    }
+    intersects->resize(height, width, depth);
+    intersects->setZero();
 
     #pragma omp parallel
     {
@@ -331,18 +338,44 @@ public:
             sdf(h, w, d) = distance;
           }
 
-          bool intersect = triangle_ray_intersection(center, Eigen::Vector3f(0, 0, 0), v1, v2, v3, distance);
+          // bool intersect = triangle_ray_intersection(center, Eigen::Vector3f(0, 0, 0), v1, v2, v3, distance);
+          bool intersect = triangle_box_intersection(min, max, v1, v2, v3);
 
           if (intersect && distance >= 0) {
             num_intersect++;
+            (*intersects)(h, w, d) = 1;
           }
         }
 
         if (num_intersect%2 == 1) {
-          sdf(h, w, d) *= -1;
+          // sdf(h, w, d) *= -1;
         }
       }
     }
+
+#define FOR_H for(int h=0; h < height; ++h)
+#define FOR_H_REV for(int h=height - 1; h >= 0; --h)
+
+#define FOR_D for(int d=0; d < depth; ++d)
+#define FOR_D_REV for(int d=depth - 1; d >= 0; --d)
+
+#define FOR_W for(int w=0; w < width; ++w)
+#define FOR_W_REV for(int w=width - 1; w >= 0; --w)
+
+#define INVERT if (sdf(h, w, d) > 0) { sdf(h, w, d) *= -1; }
+// #define INVERT 
+
+    FOR_H FOR_W FOR_D { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT; } }
+    FOR_H FOR_W FOR_D_REV { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT; } }
+
+    FOR_H FOR_D FOR_W { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT; } }
+    FOR_H FOR_D FOR_W_REV { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT; } }
+
+    FOR_W FOR_D FOR_H { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT; } }
+    FOR_W FOR_D FOR_H_REV { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT; } }
+
+    sdf = -sdf;
+
   }
 
   /** \brief Voxelize the given mesh into an occupancy grid.
@@ -451,25 +484,25 @@ bool write_float_hdf5(const std::string filepath, Eigen::Tensor<float, RANK, Eig
 
   // catch failure caused by the H5File operations
   catch(H5::FileIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
   // catch failure caused by the DataSet operations
   catch(H5::DataSetIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
   // catch failure caused by the DataSpace operations
   catch(H5::DataSpaceIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
   // catch failure caused by the DataSpace operations
   catch(H5::DataTypeIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
@@ -537,25 +570,25 @@ bool write_int_hdf5(const std::string filepath, Eigen::Tensor<int, RANK, Eigen::
 
   // catch failure caused by the H5File operations
   catch(H5::FileIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
   // catch failure caused by the DataSet operations
   catch(H5::DataSetIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
   // catch failure caused by the DataSpace operations
   catch(H5::DataSpaceIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
   // catch failure caused by the DataSpace operations
   catch(H5::DataTypeIException error) {
-    error.printError();
+    error.printErrorStack();
     return false;
   }
 
@@ -662,10 +695,12 @@ int main(int argc, char** argv) {
     if (mode == "sdf") {
       Eigen::Tensor<float, 3, Eigen::RowMajor> tensor(height, width, depth);
 
-      mesh.voxelize_sdf(tensor, voxelization_mode);
-      std::cout << "Voxelized " << input << "." << std::endl;
+      Eigen::Tensor<float, 3, Eigen::RowMajor> intersects(height, width, depth);
+      mesh.voxelize_sdf(tensor, voxelization_mode, &intersects);
+      std::cout << "Voxelized and intersects" << input << "." << std::endl;
 
       bool success = write_float_hdf5<3>(output.string(), tensor);
+      success &= write_float_hdf5<3>(output.string() + ".intersects.h5", intersects);
 
       if (!success) {
         std::cout << "Could not write " << output << "." << std::endl;
