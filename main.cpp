@@ -832,7 +832,7 @@ int main(int argc, char** argv) {
 
   if (mode == "rgb"){
 
-    std::cout << "Voxelizing with RGB into " << height << " x " << width << " x " << depth << " (height x width x depth x 4)." << std::endl;
+    std::cout << "Voxelizing with RGB into " << height << " x " << width << " x " << depth << " x 4 (height x width x depth x 4)." << std::endl;
 
     Eigen::Tensor<float, 5, Eigen::RowMajor> tensor(input_files.size(), height, width, depth, 4);
 
