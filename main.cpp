@@ -113,6 +113,7 @@ enum VoxelizationMode {
   CORNER = 1
 };
 
+
 /** \brief Just encapsulating vertices and faces. */
 class Mesh {
 public:
@@ -192,6 +193,15 @@ public:
       ss >> face(2);
 
       mesh.add_face(face);
+
+
+      Eigen::Vector3i color;
+      ss >> color(0);
+      ss >> color(1);
+      ss >> color(2);
+
+      mesh.add_color(color);
+      
     }
 
     if (n_vertices != mesh.num_vertices()) {
@@ -206,6 +216,7 @@ public:
 
     file->close();
     delete file;
+
 
     return true;
   }
@@ -265,6 +276,13 @@ public:
     return static_cast<int>(this->faces.size());
   }
 
+   /** \brief Add a color face.
+   * \param[in] color face to add
+   */
+  void add_color(Eigen::Vector3i& color) {
+    this->colors.push_back(color);
+  }
+
   /** \brief Translate the mesh.
    * \param[in] translation translation vector
    */
@@ -290,12 +308,123 @@ public:
   /** \brief Voxelize the given mesh into a SDF.
    * \param[out] sdf volume to fill with sdf values
    */
+  void voxelize_sdf_rgb(Eigen::Tensor<float, 4, Eigen::RowMajor>& sdf, const VoxelizationMode &mode,
+                    Eigen::Tensor<float, 3, Eigen::RowMajor> *intersects = 0) {
+
+
+    int height = sdf.dimension(0);
+    int width = sdf.dimension(1);
+    int depth = sdf.dimension(2);
+
+    if (intersects == 0){
+      intersects = new Eigen::Tensor<float, 3, Eigen::RowMajor>(height, width, depth);
+    }
+    intersects->resize(height, width, depth);
+    intersects->setZero();
+
+    #pragma omp parallel
+    {
+      #pragma omp for
+      for (int i = 0; i < height*width*depth; i++) {
+        int d = i%depth;
+        int w = (i/depth)%width;
+        int h = (i/depth)/width;
+
+        sdf(h, w, d, 0) = FLT_MAX;
+        sdf(h, w, d, 1) = 255;
+        sdf(h, w, d, 2) = 255;
+        sdf(h, w, d, 3) = 255;
+
+        // the box corresponding to this voxel
+        Eigen::Vector3f min(w, h, d);
+        Eigen::Vector3f max(w + 1, h + 1, d + 1);
+
+        Eigen::Vector3f center(w + 0.5f, h + 0.5f, d + 0.5f);
+        if (mode == VoxelizationMode::CORNER) {
+          center = Eigen::Vector3f(w, h, d);
+        }
+
+        // count number of intersections.
+        int num_intersect = 0;
+        for (unsigned int f = 0; f < this->num_faces(); ++f) {
+
+          Eigen::Vector3f v1 = this->vertices[this->faces[f](0)];
+          Eigen::Vector3f v2 = this->vertices[this->faces[f](1)];
+          Eigen::Vector3f v3 = this->vertices[this->faces[f](2)];
+
+          Eigen::Vector3f closest_point;
+          triangle_point_distance(center, v1, v2, v3, closest_point);
+          float distance = (center - closest_point).norm();
+
+          if (distance < sdf(h, w, d, 0)) {
+            sdf(h, w, d, 0) = distance;
+            sdf(h, w, d, 1) = this->colors[f](0);
+            sdf(h, w, d, 2) = this->colors[f](1);
+            sdf(h, w, d, 3) = this->colors[f](2);
+          }
+
+          
+
+          // bool intersect = triangle_ray_intersection(center, Eigen::Vector3f(0, 0, 0), v1, v2, v3, distance);
+          bool intersect = triangle_box_intersection(min, max, v1, v2, v3);
+
+          if (intersect && distance >= 0) {
+            num_intersect++;
+            (*intersects)(h, w, d) = 1;
+          }
+        }
+
+        if (num_intersect%2 == 1) {
+          // sdf(h, w, d) *= -1;
+        }
+      }
+    }
+
+#define FOR_H for(int h=0; h < height; ++h)
+#define FOR_H_REV for(int h=height - 1; h >= 0; --h)
+
+#define FOR_D for(int d=0; d < depth; ++d)
+#define FOR_D_REV for(int d=depth - 1; d >= 0; --d)
+
+#define FOR_W for(int w=0; w < width; ++w)
+#define FOR_W_REV for(int w=width - 1; w >= 0; --w)
+
+#define INVERT_RGB if (sdf(h, w, d, 0) > 0) {sdf(h, w, d, 0) *= -1; }
+// #define INVERT 
+
+    FOR_H FOR_W FOR_D { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT_RGB; } }
+    FOR_H FOR_W FOR_D_REV { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT_RGB; } }
+
+    FOR_H FOR_D FOR_W { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT_RGB; } }
+    FOR_H FOR_D FOR_W_REV { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT_RGB; } }
+
+    FOR_W FOR_D FOR_H { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT_RGB; } }
+    FOR_W FOR_D FOR_H_REV { if ((*intersects)(h, w, d) > 0) { break; } else { INVERT_RGB; } }
+
+    sdf = -sdf;
+
+    for (int i = 0; i < height*width*depth; i++) {
+        int d = i%depth;
+        int w = (i/depth)%width;
+        int h = (i/depth)/width;
+        sdf(h, w, d, 1) = abs(sdf(h,w,d,1));
+        sdf(h, w, d, 2) = abs(sdf(h,w,d,2));
+        sdf(h, w, d, 3) = abs(sdf(h,w,d,3));
+    }
+
+  }
+
+
+  /** \brief Voxelize the given mesh into a SDF.
+   * \param[out] sdf volume to fill with sdf values
+   */
   void voxelize_sdf(Eigen::Tensor<float, 3, Eigen::RowMajor>& sdf, const VoxelizationMode &mode,
                     Eigen::Tensor<float, 3, Eigen::RowMajor> *intersects = 0) {
 
     int height = sdf.dimension(0);
     int width = sdf.dimension(1);
     int depth = sdf.dimension(2);
+
 
     if (intersects == 0){
       intersects = new Eigen::Tensor<float, 3, Eigen::RowMajor>(height, width, depth);
@@ -353,6 +482,8 @@ public:
       }
     }
 
+
+
 #define FOR_H for(int h=0; h < height; ++h)
 #define FOR_H_REV for(int h=height - 1; h >= 0; --h)
 
@@ -378,41 +509,41 @@ public:
 
   }
 
-  /** \brief Voxelize the given mesh into an occupancy grid.
-   * \param[out] occ volume to fill
-   */
-  void voxelize_occ(Eigen::Tensor<int, 3, Eigen::RowMajor>& occ, const VoxelizationMode &mode) {
+  // /** \brief Voxelize the given mesh into an occupancy grid.
+  //  * \param[out] occ volume to fill
+  //  */
+  // void voxelize_occ(Eigen::Tensor<int, 3, Eigen::RowMajor>& occ, const VoxelizationMode &mode) {
 
-    int height = occ.dimension(0);
-    int width = occ.dimension(1);
-    int depth = occ.dimension(2);
+  //   int height = occ.dimension(0);
+  //   int width = occ.dimension(1);
+  //   int depth = occ.dimension(2);
 
-    #pragma omp parallel
-    {
-      #pragma omp for
-      for (int i = 0; i < height*width*depth; i++) {
-        int d = i%depth;
-        int w = (i/depth)%width;
-        int h = (i/depth)/width;
+  //   #pragma omp parallel
+  //   {
+  //     #pragma omp for
+  //     for (int i = 0; i < height*width*depth; i++) {
+  //       int d = i%depth;
+  //       int w = (i/depth)%width;
+  //       int h = (i/depth)/width;
 
-        Eigen::Vector3f min(w, h, d);
-        Eigen::Vector3f max(w + 1, h + 1, d + 1);
+  //       Eigen::Vector3f min(w, h, d);
+  //       Eigen::Vector3f max(w + 1, h + 1, d + 1);
 
-        for (unsigned int f = 0; f < this->num_faces(); ++f) {
+  //       for (unsigned int f = 0; f < this->num_faces(); ++f) {
 
-          Eigen::Vector3f v1 = this->vertices[this->faces[f](0)];
-          Eigen::Vector3f v2 = this->vertices[this->faces[f](1)];
-          Eigen::Vector3f v3 = this->vertices[this->faces[f](2)];
+  //         Eigen::Vector3f v1 = this->vertices[this->faces[f](0)];
+  //         Eigen::Vector3f v2 = this->vertices[this->faces[f](1)];
+  //         Eigen::Vector3f v3 = this->vertices[this->faces[f](2)];
 
-          bool overlap = triangle_box_intersection(min, max, v1, v2, v3);
-          if (overlap) {
-            occ(h, w, d) = 1;
-            break;
-          }
-        }
-      }
-    }
-  }
+  //         bool overlap = triangle_box_intersection(min, max, v1, v2, v3);
+  //         if (overlap) {
+  //           occ(h, w, d) = 1;
+  //           break;
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
 
 private:
 
@@ -421,6 +552,9 @@ private:
 
   /** \brief Faces as list of vertex indices. */
   std::vector<Eigen::Vector3i> faces;
+
+  /** \brief Faces colors as list of rgb values. */
+  std::vector<Eigen::Vector3i> colors;
 };
 
 /** \brief Write the given set of volumes to h5 file.
@@ -643,20 +777,25 @@ int main(int argc, char** argv) {
   }
 
   std::string mode = parameters["mode"].as<std::string>();
-  if (mode == "occ") {
-    std::cout << "Voxelizing occupancy grids." << std::endl;
-  }
-  else if (mode == "sdf") {
-    std::cout << "Voxelizing SDFs." << std::endl;
-  }
-  else {
-    std::cout << "Invalid mode, choose from occ or sdf." << std::endl;
-    return 1;
-  }
 
+  // if (mode == "rgb") {
+  //   std::cout << "Voxelizing occupancy grids." << std::endl;
+  // }
+  // else if (mode == "none") {
+  //   std::cout << "Voxelizing SDFs." << std::endl;
+  // }
+  // else {
+  //   std::cout << "Invalid mode, choose from occ or sdf." << std::endl;
+  //   return 1;
+  // }
+  
   boost::filesystem::path input(parameters["input"].as<std::string>());
-  if (!boost::filesystem::is_directory(input) && !boost::filesystem::is_regular_file(input)) {
-    std::cout << "Input is neither directory nor file." << std::endl;
+  // if (!boost::filesystem::is_directory(input) && !boost::filesystem::is_regular_file(input)) {
+  //   std::cout << "Input is neither directory nor file." << std::endl;
+  //   return 1;
+  // }
+  if (!boost::filesystem::is_directory(input)){
+    std::cout << "Please give a directory as input." << std::endl;
     return 1;
   }
 
@@ -679,126 +818,212 @@ int main(int argc, char** argv) {
   int width = parameters["width"].as<int>();
   int depth = parameters["depth"].as<int>();
 
-  std::cout << "Voxelizing into " << height << " x " << width << " x " << depth << " (height x width x depth)." << std::endl;
 
-  if (boost::filesystem::is_regular_file(input)) {
-    Mesh mesh;
-    bool success = Mesh::from_off(input.string(), mesh);
+  
+  std::map<int, boost::filesystem::path> input_files;
+  read_directory(input, input_files);
+
+  if (input_files.size() <= 0) {
+    std::cout << "Could not find any OFF files in the input directory." << std::endl;
+    return 1;
+  }
+
+  std::cout << "Read " << input_files.size() << " files." << std::endl;
+
+  if (mode == "rgb"){
+
+    std::cout << "Voxelizing with RGB into " << height << " x " << width << " x " << depth << " (height x width x depth x 4)." << std::endl;
+
+    Eigen::Tensor<float, 5, Eigen::RowMajor> tensor(input_files.size(), height, width, depth, 4);
+
+    int i = 0;
+    for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
+      Mesh mesh;
+      bool success = Mesh::from_off(it->second.string(), mesh);
+
+      if (!success) {
+        std::cout << "Could not read " << it->second << "." << std::endl;
+        return 1;
+      }
+
+      Eigen::Tensor<float, 4, Eigen::RowMajor> slice(height, width, depth, 4);
+      mesh.voxelize_sdf_rgb(slice, voxelization_mode);
+      tensor.chip(i, 0) = slice;
+      std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+
+      i++;
+    }
+
+    bool success = write_float_hdf5<5>(output.string(), tensor);
 
     if (!success) {
-      std::cout << "Could not read " << input << "." << std::endl;
+      std::cout << "Could not write " << output << "." << std::endl;
       return 1;
-    }
-
-    std::cout << "Read " << input << "." << std::endl;
-
-    if (mode == "sdf") {
-      Eigen::Tensor<float, 3, Eigen::RowMajor> tensor(height, width, depth);
-
-      Eigen::Tensor<float, 3, Eigen::RowMajor> intersects(height, width, depth);
-      mesh.voxelize_sdf(tensor, voxelization_mode, &intersects);
-      std::cout << "Voxelized and intersects" << input << "." << std::endl;
-
-      bool success = write_float_hdf5<3>(output.string(), tensor);
-      success &= write_float_hdf5<3>(output.string() + ".intersects.h5", intersects);
-
-      if (!success) {
-        std::cout << "Could not write " << output << "." << std::endl;
-        return 1;
-      }
-    }
-    if (mode == "occ") {
-      Eigen::Tensor<int, 3, Eigen::RowMajor> tensor(height, width, depth);
-      tensor.setZero();
-
-      mesh.voxelize_occ(tensor, voxelization_mode);
-      std::cout << "Voxelized " << input << "." << std::endl;
-
-      bool success = write_int_hdf5<3>(output.string(), tensor);
-
-      if (!success) {
-        std::cout << "Could not write " << output << "." << std::endl;
-        return 1;
-      }
     }
 
     std::cout << "Wrote " << output << "." << std::endl;
-    std::cout << "The output is a " << height << " x " << width << " x " << depth << " tensor." << std::endl;
+    std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " x 4 tensor." << std::endl;
   }
-  else {
-    std::map<int, boost::filesystem::path> input_files;
-    read_directory(input, input_files);
+  else if (mode == "bw"){
 
-    if (input_files.size() <= 0) {
-      std::cout << "Could not find any OFF files in the input directory." << std::endl;
+    std::cout << "Voxelizing into " << height << " x " << width << " x " << depth << " (height x width x depth)." << std::endl;
+
+    Eigen::Tensor<float, 4, Eigen::RowMajor> tensor(input_files.size(), height, width, depth);
+
+    int i = 0;
+    for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
+      Mesh mesh;
+      bool success = Mesh::from_off(it->second.string(), mesh);
+
+      if (!success) {
+        std::cout << "Could not read " << it->second << "." << std::endl;
+        return 1;
+      }
+
+      Eigen::Tensor<float, 3, Eigen::RowMajor> slice(height, width, depth);
+      mesh.voxelize_sdf(slice, voxelization_mode);
+
+      tensor.chip(i, 0) = slice;
+      
+      std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+
+      i++;
+    }
+
+    bool success = write_float_hdf5<4>(output.string(), tensor);
+
+    if (!success) {
+      std::cout << "Could not write " << output << "." << std::endl;
       return 1;
     }
-
-    std::cout << "Read " << input_files.size() << " files." << std::endl;
-
-    if (mode == "sdf") {
-      Eigen::Tensor<float, 4, Eigen::RowMajor> tensor(input_files.size(), height, width, depth);
-
-      int i = 0;
-      for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
-        Mesh mesh;
-        bool success = Mesh::from_off(it->second.string(), mesh);
-
-        if (!success) {
-          std::cout << "Could not read " << it->second << "." << std::endl;
-          return 1;
-        }
-
-        Eigen::Tensor<float, 3, Eigen::RowMajor> slice(height, width, depth);
-        mesh.voxelize_sdf(slice, voxelization_mode);
-        tensor.chip(i, 0) = slice;
-        std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
-
-        i++;
-      }
-
-      bool success = write_float_hdf5<4>(output.string(), tensor);
-
-      if (!success) {
-        std::cout << "Could not write " << output << "." << std::endl;
-        return 1;
-      }
-    }
-    if (mode == "occ") {
-      Eigen::Tensor<int, 4, Eigen::RowMajor> tensor(input_files.size(), height, width, depth);
-      tensor.setZero();
-
-      int i = 0;
-      for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
-        Mesh mesh;
-        bool success = Mesh::from_off(it->second.string(), mesh);
-
-        if (!success) {
-          std::cout << "Could not read " << it->second << "." << std::endl;
-          return 1;
-        }
-
-        Eigen::Tensor<int, 3, Eigen::RowMajor> slice(height, width, depth);
-        slice.setZero();
-
-        mesh.voxelize_occ(slice, voxelization_mode);
-        tensor.chip(i, 0) = slice;
-        std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
-
-        i++;
-      }
-
-      bool success = write_int_hdf5<4>(output.string(), tensor);
-
-      if (!success) {
-        std::cout << "Could not write " << output << "." << std::endl;
-        return 1;
-      }
-    }
-
+    
     std::cout << "Wrote " << output << "." << std::endl;
     std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " tensor." << std::endl;
   }
+  else{ 
+    std::cout << "No mode was given, please precise if you want to save the colors with the sdf or not (voxelize rgb) or (volexelize bw)." << std::endl;
+    return 1;
+  }
+
+  // if (boost::filesystem::is_regular_file(input)) {
+  //   Mesh mesh;
+
+  //   bool success = Mesh::from_off(input.string(), mesh);
+
+  //   if (!success) {
+  //     std::cout << "Could not read " << input << "." << std::endl;
+  //     return 1;
+  //   }
+
+  //   std::cout << "Read " << input << "." << std::endl;
+
+  //   if (mode == "sdf") {
+  //     Eigen::Tensor<float, 3, Eigen::RowMajor> tensor(height, width, depth);
+
+  //     Eigen::Tensor<float, 3, Eigen::RowMajor> intersects(height, width, depth);
+  //     mesh.voxelize_sdf(tensor, voxelization_mode, &intersects);
+  //     std::cout << "Voxelized and intersects" << input << "." << std::endl;
+
+  //     bool success = write_float_hdf5<3>(output.string(), tensor);
+  //     success &= write_float_hdf5<3>(output.string() + ".intersects.h5", intersects);
+
+  //     if (!success) {
+  //       std::cout << "Could not write " << output << "." << std::endl;
+  //       return 1;
+  //     }
+  //   }
+  //   if (mode == "occ") {
+  //     Eigen::Tensor<int, 3, Eigen::RowMajor> tensor(height, width, depth);
+  //     tensor.setZero();
+
+  //     mesh.voxelize_occ(tensor, voxelization_mode);
+  //     std::cout << "Voxelized " << input << "." << std::endl;
+
+  //     bool success = write_int_hdf5<3>(output.string(), tensor);
+
+  //     if (!success) {
+  //       std::cout << "Could not write " << output << "." << std::endl;
+  //       return 1;
+  //     }
+  //   }
+
+  //   std::cout << "Wrote " << output << "." << std::endl;
+  //   std::cout << "The output is a " << height << " x " << width << " x " << depth << " tensor." << std::endl;
+  // }
+  // else {
+  //   std::map<int, boost::filesystem::path> input_files;
+  //   read_directory(input, input_files);
+
+  //   if (input_files.size() <= 0) {
+  //     std::cout << "Could not find any OFF files in the input directory." << std::endl;
+  //     return 1;
+  //   }
+
+  //   std::cout << "Read " << input_files.size() << " files." << std::endl;
+
+  //   if (mode == "sdf") {
+  //     Eigen::Tensor<float, 5, Eigen::RowMajor> tensor(input_files.size(), height, width, depth, 4);
+
+  //     int i = 0;
+  //     for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
+  //       Mesh mesh;
+  //       bool success = Mesh::from_off(it->second.string(), mesh);
+
+  //       if (!success) {
+  //         std::cout << "Could not read " << it->second << "." << std::endl;
+  //         return 1;
+  //       }
+
+  //       Eigen::Tensor<float, 4, Eigen::RowMajor> slice(height, width, depth, 4);
+  //       mesh.voxelize_sdf(slice, voxelization_mode);
+  //       tensor.chip(i, 0) = slice;
+  //       std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+
+  //       i++;
+  //     }
+
+    //   bool success = write_float_hdf5<5>(output.string(), tensor);
+
+    //   if (!success) {
+    //     std::cout << "Could not write " << output << "." << std::endl;
+    //     return 1;
+    //   }
+    // }
+    // if (mode == "occ") {
+    //   Eigen::Tensor<int, 4, Eigen::RowMajor> tensor(input_files.size(), height, width, depth);
+    //   tensor.setZero();
+
+    //   int i = 0;
+    //   for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
+    //     Mesh mesh;
+    //     bool success = Mesh::from_off(it->second.string(), mesh);
+
+    //     if (!success) {
+    //       std::cout << "Could not read " << it->second << "." << std::endl;
+    //       return 1;
+    //     }
+
+    //     Eigen::Tensor<int, 3, Eigen::RowMajor> slice(height, width, depth);
+    //     slice.setZero();
+
+    //     mesh.voxelize_occ(slice, voxelization_mode);
+    //     tensor.chip(i, 0) = slice;
+    //     std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+
+    //     i++;
+    //   }
+
+    //   bool success = write_int_hdf5<4>(output.string(), tensor);
+
+    //   if (!success) {
+    //     std::cout << "Could not write " << output << "." << std::endl;
+    //     return 1;
+    //   }
+    // }
+
+  //   std::cout << "Wrote " << output << "." << std::endl;
+  //   std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " tensor." << std::endl;
+  // }
 
   return 0;
 }
