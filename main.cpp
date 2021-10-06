@@ -790,14 +790,14 @@ int main(int argc, char** argv) {
   // }
   
   boost::filesystem::path input(parameters["input"].as<std::string>());
-  // if (!boost::filesystem::is_directory(input) && !boost::filesystem::is_regular_file(input)) {
-  //   std::cout << "Input is neither directory nor file." << std::endl;
-  //   return 1;
-  // }
-  if (!boost::filesystem::is_directory(input)){
-    std::cout << "Please give a directory as input." << std::endl;
+  if (!boost::filesystem::is_directory(input) && !boost::filesystem::is_regular_file(input)) {
+    std::cout << "Input is neither directory nor file." << std::endl;
     return 1;
   }
+  // if (!boost::filesystem::is_directory(input)){
+  //   std::cout << "Please give a directory as input." << std::endl;
+  //   return 1;
+  // }
 
   boost::filesystem::path output(parameters["output"].as<std::string>());
   if (boost::filesystem::is_regular_file(output)) {
@@ -819,90 +819,141 @@ int main(int argc, char** argv) {
   int depth = parameters["depth"].as<int>();
 
 
-  
-  std::map<int, boost::filesystem::path> input_files;
-  read_directory(input, input_files);
-
-  if (input_files.size() <= 0) {
-    std::cout << "Could not find any OFF files in the input directory." << std::endl;
-    return 1;
-  }
-
-  std::cout << "Read " << input_files.size() << " files." << std::endl;
-
-  if (mode == "rgb"){
-
-    std::cout << "Voxelizing with RGB into " << height << " x " << width << " x " << depth << " x 4 (height x width x depth x 4)." << std::endl;
-
-    Eigen::Tensor<float, 5, Eigen::RowMajor> tensor(input_files.size(), height, width, depth, 4);
-
-    int i = 0;
-    for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
-      Mesh mesh;
-      bool success = Mesh::from_off(it->second.string(), mesh);
-
-      if (!success) {
-        std::cout << "Could not read " << it->second << "." << std::endl;
-        return 1;
-      }
-
-      Eigen::Tensor<float, 4, Eigen::RowMajor> slice(height, width, depth, 4);
-      mesh.voxelize_sdf_rgb(slice, voxelization_mode);
-      tensor.chip(i, 0) = slice;
-      std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
-
-      i++;
-    }
-
-    bool success = write_float_hdf5<5>(output.string(), tensor);
-
-    if (!success) {
-      std::cout << "Could not write " << output << "." << std::endl;
-      return 1;
-    }
-
-    std::cout << "Wrote " << output << "." << std::endl;
-    std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " x 4 tensor." << std::endl;
-  }
-  else if (mode == "bw"){
-
-    std::cout << "Voxelizing into " << height << " x " << width << " x " << depth << " (height x width x depth)." << std::endl;
-
-    Eigen::Tensor<float, 4, Eigen::RowMajor> tensor(input_files.size(), height, width, depth);
-
-    int i = 0;
-    for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
-      Mesh mesh;
-      bool success = Mesh::from_off(it->second.string(), mesh);
-
-      if (!success) {
-        std::cout << "Could not read " << it->second << "." << std::endl;
-        return 1;
-      }
-
-      Eigen::Tensor<float, 3, Eigen::RowMajor> slice(height, width, depth);
-      mesh.voxelize_sdf(slice, voxelization_mode);
-
-      tensor.chip(i, 0) = slice;
+  if (boost::filesystem::is_directory(input)){
       
-      std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+    std::map<int, boost::filesystem::path> input_files;
+    read_directory(input, input_files);
 
-      i++;
-    }
-
-    bool success = write_float_hdf5<4>(output.string(), tensor);
-
-    if (!success) {
-      std::cout << "Could not write " << output << "." << std::endl;
+    if (input_files.size() <= 0) {
+      std::cout << "Could not find any OFF files in the input directory." << std::endl;
       return 1;
     }
-    
-    std::cout << "Wrote " << output << "." << std::endl;
-    std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " tensor." << std::endl;
+
+    std::cout << "Read " << input_files.size() << " files." << std::endl;
+
+    if (mode == "rgb"){
+
+      std::cout << "Voxelizing with RGB into " << height << " x " << width << " x " << depth << " x 4 (height x width x depth x 4)." << std::endl;
+
+      Eigen::Tensor<float, 5, Eigen::RowMajor> tensor(input_files.size(), height, width, depth, 4);
+
+      int i = 0;
+      for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
+        Mesh mesh;
+        bool success = Mesh::from_off(it->second.string(), mesh);
+
+        if (!success) {
+          std::cout << "Could not read " << it->second << "." << std::endl;
+          return 1;
+        }
+
+        Eigen::Tensor<float, 4, Eigen::RowMajor> slice(height, width, depth, 4);
+        mesh.voxelize_sdf_rgb(slice, voxelization_mode);
+        tensor.chip(i, 0) = slice;
+        std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+
+        i++;
+      }
+
+      bool success = write_float_hdf5<5>(output.string(), tensor);
+
+      if (!success) {
+        std::cout << "Could not write " << output << "." << std::endl;
+        return 1;
+      }
+
+      std::cout << "Wrote " << output << "." << std::endl;
+      std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " x 4 tensor." << std::endl;
+    }
+    else if (mode == "bw"){
+
+      std::cout << "Voxelizing into " << height << " x " << width << " x " << depth << " (height x width x depth)." << std::endl;
+
+      Eigen::Tensor<float, 4, Eigen::RowMajor> tensor(input_files.size(), height, width, depth);
+
+      int i = 0;
+      for (std::map<int, boost::filesystem::path>::iterator it = input_files.begin(); it != input_files.end(); it++) {
+        Mesh mesh;
+        bool success = Mesh::from_off(it->second.string(), mesh);
+
+        if (!success) {
+          std::cout << "Could not read " << it->second << "." << std::endl;
+          return 1;
+        }
+
+        Eigen::Tensor<float, 3, Eigen::RowMajor> slice(height, width, depth);
+        mesh.voxelize_sdf(slice, voxelization_mode);
+
+        tensor.chip(i, 0) = slice;
+        
+        std::cout << "Voxelized " << it->second << " (" << (i + 1) << " of " << input_files.size() << ")." << std::endl;
+
+        i++;
+      }
+
+      bool success = write_float_hdf5<4>(output.string(), tensor);
+
+      if (!success) {
+        std::cout << "Could not write " << output << "." << std::endl;
+        return 1;
+      }
+      
+      std::cout << "Wrote " << output << "." << std::endl;
+      std::cout << "The output is a " << input_files.size() << " x " << height << " x " << width << " x " << depth << " tensor." << std::endl;
+    }
+    else{ 
+      std::cout << "No mode was given, please precise if you want to save the colors with the sdf or not (voxelize rgb) or (volexelize bw)." << std::endl;
+      return 1;
+    }
   }
-  else{ 
-    std::cout << "No mode was given, please precise if you want to save the colors with the sdf or not (voxelize rgb) or (volexelize bw)." << std::endl;
-    return 1;
+  else{
+    Mesh mesh;
+
+    bool success = Mesh::from_off(input.string(), mesh);
+
+    if (!success) {
+      std::cout << "Could not read " << input << "." << std::endl;
+      return 1;
+    }
+
+    std::cout << "Read " << input << "." << std::endl;
+
+    if (mode == "bw") {
+      Eigen::Tensor<float, 3, Eigen::RowMajor> tensor(height, width, depth);
+
+      Eigen::Tensor<float, 3, Eigen::RowMajor> intersects(height, width, depth);
+      mesh.voxelize_sdf(tensor, voxelization_mode, &intersects);
+      std::cout << "Voxelized and intersects" << input << "." << std::endl;
+
+      bool success = write_float_hdf5<3>(output.string(), tensor);
+      success &= write_float_hdf5<3>(output.string() + ".intersects.h5", intersects);
+
+      if (!success) {
+        std::cout << "Could not write " << output << "." << std::endl;
+        return 1;
+      }
+    }
+    else if (mode == "rgb") {
+      Eigen::Tensor<float, 4, Eigen::RowMajor> tensor(height, width, depth, 4);
+      // tensor.setZero();
+
+      mesh.voxelize_sdf_rgb(tensor, voxelization_mode);
+      std::cout << "Voxelized " << input << "." << std::endl;
+
+      bool success = write_float_hdf5<4>(output.string(), tensor);
+
+      if (!success) {
+        std::cout << "Could not write " << output << "." << std::endl;
+        return 1;
+      }
+    }
+    else{ 
+      std::cout << "No mode was given, please precise if you want to save the colors with the sdf or not (voxelize rgb) or (volexelize bw)." << std::endl;
+      return 1;
+    }
+
+    std::cout << "Wrote " << output << "." << std::endl;
+    std::cout << "The output is a " << height << " x " << width << " x " << depth << " x 4 tensor." << std::endl;
   }
 
   // if (boost::filesystem::is_regular_file(input)) {
